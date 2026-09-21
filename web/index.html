@@ -99,16 +99,39 @@
   button:hover:not(:disabled) { background: #333; }
   button:disabled { background: #999; cursor: not-allowed; }
 
+  /* Sending something to a machine in another building deserves a louder
+     answer than a line of grey text. */
   .result {
     margin-top: 16px;
-    padding: 12px;
+    padding: 14px;
     border: 2px solid var(--line);
     font-size: 14px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
     display: none;
   }
-  .result[data-show="yes"] { display: block; }
-  .result[data-ok="yes"] { background: var(--accent); }
+  .result[data-show="yes"] { display: block; animation: stamp 240ms ease-out; }
+  .result[data-ok="yes"] { background: var(--ink); color: var(--paper); }
   .result[data-ok="no"] { background: var(--warn); }
+
+  @keyframes stamp {
+    from { transform: scale(0.97); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+
+  /* On a success the preview feeds upward and out, the way the paper does. */
+  .paper-window { overflow: hidden; }
+  @keyframes feed {
+    from { transform: translateY(0); }
+    to { transform: translateY(-105%); }
+  }
+  pre.paper.feeding { animation: feed 700ms cubic-bezier(.3, .7, .2, 1); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .result[data-show="yes"] { animation: none; }
+    pre.paper.feeding { animation: none; }
+  }
 
   /* The preview is the point: 48 columns is what the paper actually holds, so
      show the wrap rather than describing it. */
@@ -173,7 +196,9 @@
     <span>Preview</span>
     <span>48 columns</span>
   </div>
-  <pre class="paper" id="preview"></pre>
+  <div class="paper-window">
+    <pre class="paper" id="preview"></pre>
+  </div>
 </main>
 
 <script>
@@ -182,8 +207,10 @@
   const form = $('form'), text = $('text'), name = $('name'), password = $('password');
   const count = $('count'), result = $('result'), send = $('send'), preview = $('preview');
   const RULE = '═'.repeat(48);
+  const LABEL = 'Print it';
   let maxChars = 600;
   let ready = false;
+  let labelTimer = null;
 
   // The password is a shared one handed out deliberately, and remembering it
   // saves retyping on the phone. Wrapped because private windows throw here.
@@ -244,6 +271,16 @@
     result.textContent = message;
     result.dataset.show = 'yes';
     result.dataset.ok = ok ? 'yes' : 'no';
+    // Re-trigger the stamp even when the same message comes back twice.
+    result.style.animation = 'none';
+    void result.offsetWidth;
+    result.style.animation = '';
+  }
+
+  /* Run the preview out of its window, then let render() refill it. */
+  function feedOut() {
+    preview.classList.add('feeding');
+    setTimeout(() => preview.classList.remove('feeding'), 700);
   }
 
   async function refresh() {
@@ -268,7 +305,8 @@
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     send.disabled = true;
-    const label = send.textContent;
+    // A pending "Printed ✓" from the last one must not overwrite this one.
+    clearTimeout(labelTimer);
     send.textContent = 'Printing…';
     try {
       localStorage.setItem('receipt-password', password.value);
@@ -285,12 +323,22 @@
         }),
       });
       const body = await r.json();
-      say(r.ok ? 'On paper. Thank you.' : body.message, r.ok);
-      if (r.ok) text.value = '';
+      if (r.ok) {
+        say('✓ Printed — it is on the paper now', true);
+        feedOut();
+        text.value = '';
+        send.textContent = 'Printed ✓';
+        // Hold the confirmation on the button long enough to be read, then
+        // put it back to an invitation.
+        labelTimer = setTimeout(() => { send.textContent = LABEL; }, 2500);
+      } else {
+        say(body.message, false);
+        send.textContent = LABEL;
+      }
     } catch (e) {
       say('The printer did not answer.', false);
+      send.textContent = LABEL;
     }
-    send.textContent = label;
     refresh();
   });
 
