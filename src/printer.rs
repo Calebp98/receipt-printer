@@ -183,6 +183,16 @@ impl Printer {
         None
     }
 
+    /// The near-end sensor trips with a good few metres still on the roll, so
+    /// this is something to mention, not something to stop for.
+    pub const NEARLY_OUT: &'static str = "paper nearly out";
+
+    /// Only what stops a print outright — the cover being open, a genuinely
+    /// empty roll, an error state. A warning is not a refusal.
+    pub fn blockers(&self) -> Vec<String> {
+        self.status().into_iter().filter(|p| p != Self::NEARLY_OUT).collect()
+    }
+
     /// Ask the printer how it is. An empty list means it is ready.
     pub fn status(&self) -> Vec<String> {
         let mut problems = Vec::new();
@@ -195,7 +205,7 @@ impl Printer {
             if p & 0x60 != 0 {
                 problems.push("out of paper".into());
             } else if p & 0x0c != 0 {
-                problems.push("paper nearly out".into());
+                problems.push(Self::NEARLY_OUT.into());
             }
         }
         if let Some(o) = self.query(2) {

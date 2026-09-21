@@ -182,7 +182,7 @@
 
   <footer>
     Built on <code>receipt</code>, a Rust ESC/POS driver.
-    Paper is finite, so there is a cooldown and a daily limit.
+    Print as much as you like; the roll is the only real limit.
   </footer>
 </main>
 
@@ -264,7 +264,8 @@
       ready = s.ready;
       $('status').dataset.ready = s.ready ? 'yes' : 'no';
       $('status-text').textContent = s.paused ? 'Paused by the owner' : s.detail;
-      $('status-right').textContent = s.remaining_today + ' left today';
+      $('status-right').textContent =
+        s.remaining_today === null ? '' : s.remaining_today + ' left today';
     } catch (e) {
       ready = false;
       $('status').dataset.ready = 'no';

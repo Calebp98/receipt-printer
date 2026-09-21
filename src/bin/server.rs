@@ -51,16 +51,17 @@ struct Args {
     #[arg(long, default_value_t = 600)]
     max_chars: usize,
 
-    /// Seconds a client must wait between prints
-    #[arg(long, default_value_t = 30)]
+    /// Seconds a client must wait between prints; 0 for no wait
+    #[arg(long, default_value_t = 0)]
     cooldown: u64,
 
-    /// Prints allowed per client per day
-    #[arg(long, default_value_t = 12)]
+    /// Prints allowed per client per day; 0 for no limit
+    #[arg(long, default_value_t = 0)]
     per_client_daily: usize,
 
-    /// Prints allowed across everyone per day, to bound the paper
-    #[arg(long, default_value_t = 250)]
+    /// Prints allowed across everyone per day; 0 for no limit. Not a rationing
+    /// of the paper so much as a stop on a runaway loop.
+    #[arg(long, default_value_t = 2000)]
     daily_cap: usize,
 
     /// While this file exists nothing prints; the page says so
@@ -155,7 +156,7 @@ struct Status {
     ready: bool,
     detail: String,
     paused: bool,
-    remaining_today: usize,
+    remaining_today: Option<usize>,
     max_chars: usize,
 }
 
@@ -232,24 +233,28 @@ async fn status(State(app): State<Arc<App>>) -> Json<Status> {
     let remaining = {
         let mut gate = app.gate.lock().unwrap();
         gate.roll_over();
-        app.args.daily_cap.saturating_sub(gate.total_today)
+        match app.args.daily_cap {
+            0 => None,
+            cap => Some(cap.saturating_sub(gate.total_today)),
+        }
     };
 
     // Opening the device is cheap and tells the truth about cover and paper,
     // which is the whole point of showing a status at all.
     let (ready, detail) = match tokio::task::spawn_blocking(|| {
-        Printer::open().map(|p| p.status())
+        Printer::open().map(|p| (p.blockers(), p.status()))
     })
     .await
     {
-        Ok(Ok(problems)) if problems.is_empty() => (true, "ready".to_string()),
-        Ok(Ok(problems)) => (false, problems.join("; ")),
+        Ok(Ok((_, warnings))) if warnings.is_empty() => (true, "ready".to_string()),
+        // Say what is wrong either way; only a blocker makes it not ready.
+        Ok(Ok((blockers, warnings))) => (blockers.is_empty(), warnings.join("; ")),
         Ok(Err(e)) => (false, e.to_string()),
         Err(e) => (false, e.to_string()),
     };
 
     Json(Status {
-        ready: ready && !paused && remaining > 0,
+        ready: ready && !paused && remaining != Some(0),
         detail,
         paused,
         remaining_today: remaining,
@@ -287,7 +292,9 @@ async fn print(
     let _one_at_a_time = app.printer.lock().await;
     let printed = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let mut p = Printer::open().map_err(|e| e.to_string())?;
-        let problems = p.status();
+        // Blockers, not warnings: a roll that is merely getting low still has
+        // plenty on it, and refusing there would stop printing days early.
+        let problems = p.blockers();
         if !problems.is_empty() {
             return Err(problems.join("; "));
         }
@@ -320,17 +327,19 @@ impl App {
         let mut gate = self.gate.lock().unwrap();
         gate.roll_over();
 
-        if gate.total_today >= self.args.daily_cap {
+        // Every limit here is off when it is zero, and all of them can be.
+        // The password is the real gate; these only stop a loop.
+        if self.args.daily_cap > 0 && gate.total_today >= self.args.daily_cap {
             return Err(Refusal::DailyCap);
         }
 
         let cooldown = Duration::from_secs(self.args.cooldown);
         if let Some(client) = gate.clients.get(&who) {
             let since = client.last.elapsed();
-            if since < cooldown {
+            if self.args.cooldown > 0 && since < cooldown {
                 return Err(Refusal::Cooldown((cooldown - since).as_secs() + 1));
             }
-            if client.today >= self.args.per_client_daily {
+            if self.args.per_client_daily > 0 && client.today >= self.args.per_client_daily {
                 return Err(Refusal::ClientDaily);
             }
         }

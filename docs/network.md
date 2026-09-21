@@ -37,11 +37,12 @@ Paper is finite and the printer is in someone's house, so:
 
 - **A shared password**, compared in constant time. Handed out deliberately —
   this is not "anyone with the URL".
-- **A cooldown** (30s) and a **daily allowance per client** (12), keyed on
-  `CF-Connecting-IP`, which only the tunnel can set because nothing else can
-  reach the port.
-- **A cap for the whole day** (250), so a crowd cannot do what one person
-  cannot.
+- **A cap for the whole day** (2000), which is a stop on a runaway loop rather
+  than a rationing of the paper.
+- **A cooldown and a per-client daily allowance**, both off. `--cooldown` and
+  `--per-client-daily` turn them back on, keyed on `CF-Connecting-IP`, which
+  only the tunnel can set because nothing else can reach the port. Every limit
+  is off when it is zero, `--daily-cap` included.
 - **A length limit** (600 characters) and control characters stripped.
 - **One print at a time**, behind a mutex. A second USB claim would fail anyway.
 - **A pause file**. `sudo -u caleb touch /var/lib/receipt-server/paused` stops
@@ -51,6 +52,11 @@ Allowances are spent before printing and handed back if the printer refuses, so
 a jam cannot be used to mint extra prints. Counts live in memory and reset at
 local midnight — and on restart, which is a deliberate trade for not keeping a
 database on an SD card.
+
+A **warning is not a refusal**: the near-end paper sensor trips with metres
+still on the roll, so `blockers()` leaves it out and only an open cover, a truly
+empty roll or an error state stops a print. `/api/status` still reports it, and
+the page shows it while staying ready.
 
 ## Running it
 
