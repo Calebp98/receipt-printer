@@ -1,0 +1,13 @@
+# /etc/cloudflared/config.yml
+#
+# The tunnel dials out to Cloudflare, so nothing listens on the public internet
+# and no port is forwarded. Replace TUNNEL_ID with what `cloudflared tunnel
+# create` printed.
+tunnel: TUNNEL_ID
+credentials-file: /etc/cloudflared/TUNNEL_ID.json
+
+ingress:
+  - hostname: receipt.calebparikh.xyz
+    service: http://127.0.0.1:8080
+  # Anything else that arrives down this tunnel is not ours.
+  - service: http_status:404

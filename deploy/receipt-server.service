@@ -1,0 +1,38 @@
+[Unit]
+Description=Receipt printer HTTP endpoint
+Documentation=https://github.com/calebparikh/receipt-printer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=caleb
+# plugdev is what the udev rule grants the printer to; without it libusb
+# cannot claim the device and the service exits at startup.
+Group=plugdev
+SupplementaryGroups=plugdev
+
+# RECEIPT_PASSWORD lives here rather than in ExecStart, where it would show
+# up in `ps` for every user on the box.
+EnvironmentFile=/etc/receipt-server.env
+ExecStart=/usr/local/bin/receipt-server --listen 127.0.0.1:8080
+
+# Only the tunnel talks to this, so binding to localhost is the firewall.
+Restart=always
+RestartSec=5
+
+# Creates and owns /var/lib/receipt-server, where the pause file goes.
+StateDirectory=receipt-server
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+# Not PrivateDevices: that hides /dev/bus/usb and there would be no printer.
+
+[Install]
+WantedBy=multi-user.target

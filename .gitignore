@@ -1,0 +1,6 @@
+/target
+__pycache__/
+*.pyc
+
+# Previews and scratch PNGs from --preview
+/*.png

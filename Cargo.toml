@@ -1,0 +1,32 @@
+[package]
+name = "receipt"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# Build libusb from source instead of linking the host's copy. Needed when
+# cross-compiling for the Pi, where there is no aarch64 libusb to link against.
+vendored-usb = ["rusb/vendored"]
+# The HTTP endpoint. Off by default so the CLI does not drag in tokio.
+server = ["dep:axum", "dep:tokio", "dep:serde", "dep:serde_json", "dep:chrono"]
+
+[[bin]]
+name = "receipt"
+path = "src/main.rs"
+
+[[bin]]
+name = "receipt-server"
+path = "src/bin/server.rs"
+required-features = ["server"]
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive", "env"] }
+image = "0.25.9"
+rusb = "0.9.4"
+tiny-skia = "0.12.0"
+
+axum = { version = "0.8", optional = true }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"], optional = true }

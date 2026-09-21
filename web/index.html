@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Print Something</title>
+<meta name="description" content="Send a message to a thermal receipt printer in Cambridge.">
+<style>
+  :root {
+    --ink: #111;
+    --paper: #fff;
+    --faint: #767676;
+    --line: #111;
+    --accent: #cfe3d4;
+    --warn: #f2d0d0;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 48px 16px 80px;
+    background: var(--paper);
+    color: var(--ink);
+    font: 16px/1.5 var(--mono);
+    -webkit-text-size-adjust: 100%;
+  }
+
+  main { max-width: 640px; margin: 0 auto; }
+
+  h1 {
+    font-size: 28px;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    margin: 0 0 8px;
+    text-transform: uppercase;
+  }
+
+  .blurb { color: var(--faint); margin: 0 0 32px; font-size: 14px; }
+
+  /* Status reads as a stamped label rather than a coloured pill. */
+  .status {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    border: 2px solid var(--line);
+    padding: 10px 12px;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 32px;
+  }
+  .status[data-ready="no"] { background: var(--warn); }
+  .status[data-ready="yes"] { background: var(--accent); }
+  .status .right { color: #333; }
+
+  label {
+    display: block;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+  }
+
+  input, textarea, button {
+    font: inherit;
+    color: inherit;
+    border-radius: 0;
+    background: var(--paper);
+    border: 2px solid var(--line);
+    width: 100%;
+    padding: 10px 12px;
+  }
+
+  input:focus-visible, textarea:focus-visible, button:focus-visible {
+    outline: 3px solid var(--ink);
+    outline-offset: 2px;
+  }
+
+  textarea { resize: vertical; min-height: 140px; }
+
+  .field { margin-bottom: 20px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 520px) { .row { grid-template-columns: 1fr; gap: 0; } }
+
+  .count { font-size: 12px; color: var(--faint); margin-top: 6px; text-align: right; }
+  .count[data-over="yes"] { color: #a11; font-weight: 700; }
+
+  button {
+    cursor: pointer;
+    background: var(--ink);
+    color: var(--paper);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    padding: 14px;
+  }
+  button:hover:not(:disabled) { background: #333; }
+  button:disabled { background: #999; cursor: not-allowed; }
+
+  .result {
+    margin-top: 16px;
+    padding: 12px;
+    border: 2px solid var(--line);
+    font-size: 14px;
+    display: none;
+  }
+  .result[data-show="yes"] { display: block; }
+  .result[data-ok="yes"] { background: var(--accent); }
+  .result[data-ok="no"] { background: var(--warn); }
+
+  /* The preview is the point: 48 columns is what the paper actually holds, so
+     show the wrap rather than describing it. */
+  .preview-head {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--faint);
+    margin: 40px 0 6px;
+  }
+
+  pre.paper {
+    margin: 0;
+    border: 2px solid var(--line);
+    padding: 16px 12px;
+    font-size: 12px;
+    line-height: 1.35;
+    white-space: pre;
+    overflow-x: auto;
+    background:
+      repeating-linear-gradient(180deg, #fff 0 22px, #fafafa 22px 44px);
+  }
+  pre.paper .faint { color: var(--faint); }
+
+  footer { margin-top: 48px; font-size: 12px; color: var(--faint); }
+  footer code { background: #f2f2f2; padding: 1px 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Print something</h1>
+  <p class="blurb">
+    There is an Epson TM-T20II thermal printer on a Raspberry Pi in Cambridge.
+    Whatever you send comes out on paper, 48 characters wide, and stays there.
+  </p>
+
+  <div class="status" id="status" data-ready="unknown">
+    <span id="status-text">Checking the printer…</span>
+    <span class="right" id="status-right"></span>
+  </div>
+
+  <form id="form">
+    <div class="row">
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+      </div>
+      <div class="field">
+        <label for="name">Your name <span style="text-transform:none">(optional)</span></label>
+        <input id="name" type="text" maxlength="24" autocomplete="name">
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="text">Message</label>
+      <textarea id="text" required placeholder="Type it here."></textarea>
+      <div class="count" id="count" data-over="no">0</div>
+    </div>
+
+    <button id="send" type="submit">Print it</button>
+    <div class="result" id="result" data-show="no"></div>
+  </form>
+
+  <div class="preview-head">
+    <span>Preview</span>
+    <span>48 columns</span>
+  </div>
+  <pre class="paper" id="preview"></pre>
+
+  <footer>
+    Built on <code>receipt</code>, a Rust ESC/POS driver.
+    Paper is finite, so there is a cooldown and a daily limit.
+  </footer>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const form = $('form'), text = $('text'), name = $('name'), password = $('password');
+  const count = $('count'), result = $('result'), send = $('send'), preview = $('preview');
+  const RULE = '═'.repeat(48);
+  let maxChars = 600;
+  let ready = false;
+
+  // The password is a shared one handed out deliberately, and remembering it
+  // saves retyping on the phone. Wrapped because private windows throw here.
+  try {
+    const saved = localStorage.getItem('receipt-password');
+    if (saved) password.value = saved;
+  } catch (e) { /* no storage, no problem */ }
+
+  // Mirrors wrap() in src/printer.rs: greedy by word, hard-split anything
+  // longer than the line itself.
+  function wrap(line, width) {
+    const chars = [...line];
+    if (chars.length <= width) return [line];
+    const out = [];
+    let current = '';
+    for (let word of line.split(' ')) {
+      while ([...word].length > width) {
+        if (current) { out.push(current); current = ''; }
+        const head = [...word].slice(0, width).join('');
+        out.push(head);
+        word = [...word].slice(width).join('');
+      }
+      const extra = current ? 1 : 0;
+      if ([...current].length + extra + [...word].length > width) {
+        out.push(current);
+        current = '';
+      } else if (extra) {
+        current += ' ';
+      }
+      current += word;
+    }
+    if (current) out.push(current);
+    return out;
+  }
+
+  function render() {
+    const body = text.value.replace(/\r\n/g, '\n');
+    const lines = [];
+    for (const line of body.split('\n')) lines.push(...wrap(line, 48));
+
+    const when = new Date().toLocaleString('en-GB', {
+      weekday: 'short', day: 'numeric', month: 'short',
+      hour: '2-digit', minute: '2-digit',
+    }).replace(',', '');
+    const who = name.value.trim() ? 'from ' + name.value.trim() : '';
+    const gap = Math.max(1, 48 - who.length - when.length);
+    const footer = who + ' '.repeat(gap) + when;
+
+    preview.textContent = [RULE, '', ...lines, '', RULE, footer].join('\n');
+
+    const used = [...body].length;
+    count.textContent = used + ' / ' + maxChars;
+    count.dataset.over = used > maxChars ? 'yes' : 'no';
+    send.disabled = !ready || used === 0 || used > maxChars;
+  }
+
+  function say(message, ok) {
+    result.textContent = message;
+    result.dataset.show = 'yes';
+    result.dataset.ok = ok ? 'yes' : 'no';
+  }
+
+  async function refresh() {
+    try {
+      const r = await fetch('/api/status');
+      const s = await r.json();
+      maxChars = s.max_chars;
+      ready = s.ready;
+      $('status').dataset.ready = s.ready ? 'yes' : 'no';
+      $('status-text').textContent = s.paused ? 'Paused by the owner' : s.detail;
+      $('status-right').textContent = s.remaining_today + ' left today';
+    } catch (e) {
+      ready = false;
+      $('status').dataset.ready = 'no';
+      $('status-text').textContent = 'Cannot reach the printer';
+      $('status-right').textContent = '';
+    }
+    render();
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    send.disabled = true;
+    const label = send.textContent;
+    send.textContent = 'Printing…';
+    try {
+      localStorage.setItem('receipt-password', password.value);
+    } catch (e) { /* no storage, no problem */ }
+
+    try {
+      const r = await fetch('/api/print', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          password: password.value,
+          name: name.value,
+          text: text.value,
+        }),
+      });
+      const body = await r.json();
+      say(r.ok ? 'On paper. Thank you.' : body.message, r.ok);
+      if (r.ok) text.value = '';
+    } catch (e) {
+      say('The printer did not answer.', false);
+    }
+    send.textContent = label;
+    refresh();
+  });
+
+  text.addEventListener('input', render);
+  name.addEventListener('input', render);
+  refresh();
+  setInterval(refresh, 20000);
+})();
+</script>
+</body>
+</html>
