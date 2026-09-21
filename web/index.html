@@ -324,7 +324,7 @@
       });
       const body = await r.json();
       if (r.ok) {
-        say('✓ Printed — it is on the paper now', true);
+        say('✓ Printed', true);
         feedOut();
         text.value = '';
         send.textContent = 'Printed ✓';
