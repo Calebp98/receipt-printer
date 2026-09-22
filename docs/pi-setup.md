@@ -7,7 +7,7 @@ Everything below assumes a headless setup: the Pi is never plugged into a monito
 
 Set up on 2026-09-21 and printing.
 
-- `raspi-zero2w-receipt.local`, `192.168.0.47`, user `caleb`
+- `raspi-zero2w-receipt.local` on the house LAN, user `caleb`
 - Pi OS trixie (Debian 13), kernel 6.18.50+rpt-rpi-v8, aarch64, 512MB
 - SSH key auth from the Mac; `sudo` still asks for a password
 - `dtoverlay=dwc2,dr_mode=host` is already in `/boot/firmware/config.txt`, so

@@ -1,6 +1,6 @@
 [Unit]
 Description=Receipt printer HTTP endpoint
-Documentation=https://github.com/calebparikh/receipt-printer
+Documentation=https://github.com/Calebp98/receipt-printer
 After=network-online.target
 Wants=network-online.target
 
