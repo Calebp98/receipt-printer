@@ -15,6 +15,7 @@
 use axum::{
     Json, Router,
     body::Bytes,
+    extract::{DefaultBodyLimit, Multipart},
     extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
@@ -22,7 +23,7 @@ use axum::{
 };
 use chrono::{Datelike, Local};
 use clap::Parser;
-use receipt::linear;
+use receipt::{linear, spoken};
 use receipt::printer::{Align, Font, Printer, Style, WIDTH, WIDTH_BIG};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -85,6 +86,11 @@ struct Args {
     /// 30s apart. Covers a paper change; does not survive a restart.
     #[arg(long, default_value_t = 6)]
     linear_retries: u32,
+
+    /// Bearer token the Index 01 must send. Without it that route refuses
+    /// everything: its URL would otherwise be a printer anyone can post to.
+    #[arg(long, env = "INDEX_TOKEN", hide_env_values = true)]
+    index_token: Option<String>,
 }
 
 /// What the whole service knows. The gate is a plain mutex because every
@@ -256,12 +262,23 @@ async fn main() {
         seen: Mutex::new(VecDeque::new()),
     });
 
+    match app.args.index_token {
+        Some(_) => println!("index: a spoken note starting \"{}\" goes to the paper", spoken::TRIGGER),
+        None => println!("index: off (no INDEX_TOKEN)"),
+    }
+
     let routes = Router::new()
         .route("/", get(page))
         .route("/healthz", get(|| async { "ok" }))
         .route("/api/status", get(status))
         .route("/api/print", post(print))
         .route("/linear/webhook", post(linear_webhook))
+        .route(
+            "/index/webhook",
+            // The ring can be set to post the audio as well as the text. We
+            // have no use for an m4a, but it must not bounce the request.
+            post(index_webhook).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
+        )
         .with_state(app);
 
     let listener = match tokio::net::TcpListener::bind(listen).await {
@@ -719,4 +736,127 @@ fn truncate(s: &str, max: usize) -> String {
     }
     let cut = s.char_indices().nth(max).map_or(s.len(), |(i, _)| i);
     format!("{}…", s[..cut].trim_end())
+}
+
+// --- the Index 01 ----------------------------------------------------------
+
+/// A recording from the ring. It posts every recording here, so most of what
+/// arrives is an ordinary note and must be left alone — only a transcription
+/// starting with the trigger word is a request to print.
+///
+/// The body is multipart: `transcription`, `recordedAt`, `client`, and
+/// optionally an m4a of the audio, which is read past and dropped.
+async fn index_webhook(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    mut form: Multipart,
+) -> (StatusCode, String) {
+    let Some(token) = &app.args.index_token else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "index is not configured".into());
+    };
+
+    let offered = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim_start_matches("Bearer ").trim())
+        .unwrap_or_default();
+    if !constant_time_eq(offered.as_bytes(), token.as_bytes()) {
+        return (StatusCode::UNAUTHORIZED, "bad token".into());
+    }
+
+    let mut transcription = None;
+    let mut recorded_at = None;
+    while let Ok(Some(field)) = form.next_field().await {
+        match field.name().unwrap_or_default().to_string().as_str() {
+            "transcription" => transcription = field.text().await.ok(),
+            "recordedAt" => recorded_at = field.text().await.ok(),
+            // Audio and anything else: consume it so the stream stays in step.
+            _ => {
+                let _ = field.bytes().await;
+            }
+        }
+    }
+
+    let Some(transcription) = transcription else {
+        // Audio-only, or the transcription failed. Nothing to print, and
+        // nothing wrong either.
+        return (StatusCode::OK, "no transcription".into());
+    };
+
+    let Some(text) = spoken::requested(&transcription) else {
+        println!("index: note, not a print request");
+        return (StatusCode::OK, "not a print request".into());
+    };
+
+    // A repeat delivery of the same recording is the same paper.
+    if let Some(at) = &recorded_at {
+        let key = format!("index:{at}");
+        if app.already_seen(&key) {
+            println!("index: already handled {key}");
+            return (StatusCode::OK, "already handled".into());
+        }
+        app.remember(key);
+    }
+
+    if app.args.pause_file.exists() {
+        return (StatusCode::OK, "printing is paused".into());
+    }
+
+    // Answer first: the ring is waiting on this and printing takes seconds.
+    tokio::spawn(async move { print_spoken(app, text).await });
+    (StatusCode::OK, "printing".into())
+}
+
+/// Put a spoken note on paper, retrying on the same terms as a Linear slip.
+async fn print_spoken(app: Arc<App>, text: String) {
+    let text = Arc::new(text);
+    for attempt in 1..=app.args.linear_retries {
+        let job = text.clone();
+        let guard = app.printer.lock().await;
+        let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let mut p = Printer::open().map_err(|e| e.to_string())?;
+            let problems = p.blockers();
+            if !problems.is_empty() {
+                return Err(problems.join("; "));
+            }
+            compose_spoken(&mut p, &job);
+            p.send().map(|_| ()).map_err(|e| e.to_string())
+        })
+        .await;
+        drop(guard);
+
+        match result {
+            Ok(Ok(())) => {
+                println!("index: printed a spoken note");
+                return;
+            }
+            Ok(Err(why)) => eprintln!("index: attempt {attempt}: {why}"),
+            Err(e) => eprintln!("index: attempt {attempt}: {e}"),
+        }
+        tokio::time::sleep(Duration::from_secs(30)).await;
+    }
+    eprintln!("index: gave up on a spoken note");
+}
+
+/// A spoken note, set larger than a web message: these are short, and the
+/// point of saying one out loud is to read it across the room.
+fn compose_spoken(p: &mut Printer, text: &str) {
+    p.init();
+    p.align(Align::Left).rule(RULE);
+    p.font(Font::B).align(Align::Centre).text("spoken");
+    p.font(Font::A).align(Align::Left);
+    p.rule(RULE);
+    p.feed(1);
+
+    p.style(Style { tall: true, wide: true, ..Style::default() });
+    p.line_spacing(Font::A.height() * 2);
+    p.text_wrapped(text, WIDTH_BIG);
+    p.default_spacing().style(Style::default());
+
+    p.feed(1).rule(RULE);
+    p.font(Font::B).align(Align::Centre);
+    p.text(&Local::now().format("%H:%M %a %e %b").to_string());
+    p.align(Align::Left).font(Font::A);
+
+    p.feed(3).cut();
 }

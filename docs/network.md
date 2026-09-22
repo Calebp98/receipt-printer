@@ -25,6 +25,7 @@ route to the port that does not come down it.
 - `GET /api/status` — `{ready, detail, paused, remaining_today, max_chars}`
 - `POST /api/print` — `{password, name, text}`
 - `POST /linear/webhook` — Linear Comment events; see below
+- `POST /index/webhook` — recordings from an Index 01; see below
 - `GET /healthz` — for uptime checks
 
 Refusals carry the status code that fits: 401 wrong password, 400 empty, 413
@@ -114,6 +115,37 @@ Sign a payload with the same secret and post it. Note that Cloudflare's bot
 check rejects some HTTP clients on sight with a 403 and `error code: 1010` —
 that is Cloudflare, not this service, and `curl` gets through where Python's
 `urllib` does not.
+
+## The Index 01
+
+Press the button on the ring, say "print buy milk", and it comes out on paper at
+double size. Anything not starting with that word is an ordinary note and is
+left alone.
+
+Set up in the Pebble app, under the Index tab settings → Webhook:
+
+- **URL** `https://receipt.calebparikh.xyz/index/webhook`
+- **Headers** `Authorization: Bearer <the INDEX_TOKEN from /etc/receipt-server.env>`
+- **Send** transcription (audio is accepted and discarded, so "both" also works)
+- **Trigger** whichever button combination suits; the word is what decides
+
+The ring posts *every* recording here, which is why the trigger word has to be
+the first word and has to stand alone: "printer jammed again" is someone
+talking. The normal Index agent still runs, so a printed note is also still a
+note in the app.
+
+### Why it is shaped this way
+
+- **A webhook, not an MCP sandbox.** The MCP route puts a cloud model in charge
+  of deciding whether to call a print tool, and is limited to double-click. The
+  rule here is deterministic, so a model in the loop can only add ways to fail.
+- **The token is checked in constant time**, and without one configured the
+  route answers 503. The URL is otherwise a printer anyone can post to.
+- **Audio is read and dropped.** The body limit is 32MB so a recording sent
+  alongside the text does not bounce the request.
+- **`recordedAt` is the de-duplication key**, so a redelivered recording does
+  not print twice.
+- **200 goes back before printing starts**, as everywhere else here.
 
 ## Running it
 

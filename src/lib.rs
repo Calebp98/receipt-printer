@@ -9,3 +9,4 @@ pub mod generative;
 pub mod linear;
 pub mod printer;
 pub mod raster;
+pub mod spoken;
