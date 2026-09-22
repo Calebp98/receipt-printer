@@ -302,6 +302,11 @@ async fn status(State(app): State<Arc<App>>) -> Json<Status> {
     // Opening the device is cheap and tells the truth about cover and paper,
     // which is the whole point of showing a status at all. Ask once: two
     // queries can straddle a cover being closed and contradict each other.
+    //
+    // Behind the same lock as printing. There is one USB claim to go round, and
+    // a page polling this while a print starts makes the print fail with
+    // "Resource busy".
+    let guard = app.printer.lock().await;
     let (ready, detail) = match tokio::task::spawn_blocking(|| {
         Printer::open().map(|p| p.status())
     })
@@ -316,6 +321,7 @@ async fn status(State(app): State<Arc<App>>) -> Json<Status> {
         Ok(Err(e)) => (false, e.to_string()),
         Err(e) => (false, e.to_string()),
     };
+    drop(guard);
 
     Json(Status {
         ready: ready && !paused && remaining != Some(0),

@@ -45,7 +45,9 @@ Paper is finite and the printer is in someone's house, so:
   only the tunnel can set because nothing else can reach the port. Every limit
   is off when it is zero, `--daily-cap` included.
 - **A length limit** (600 characters) and control characters stripped.
-- **One print at a time**, behind a mutex. A second USB claim would fail anyway.
+- **One print at a time**, behind a mutex — and the status query is behind the
+  same one. There is a single USB claim to go round, and a page polling status
+  while a print starts makes the print fail with "Resource busy".
 - **A pause file**. `sudo -u caleb touch /var/lib/receipt-server/paused` stops
   printing within a second and the page says so; delete it to resume.
 
@@ -83,6 +85,9 @@ is: it resolves `viewer` at startup, and only that person's comments print.
 
 ### Why it is shaped this way
 
+- **Linear escapes Markdown punctuation.** A comment typed as `[print]` arrives
+  as `\[print\]`, so the body is unescaped before the marker is looked for —
+  and before the note goes on paper, where the backslashes would print.
 - **The signature is checked over the raw bytes, before parsing.** Re-serialising
   the JSON would not reproduce what was signed.
 - **A bad signature gets 401; everything else gets 200.** Linear retries a

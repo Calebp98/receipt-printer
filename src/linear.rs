@@ -165,15 +165,41 @@ impl CommentEvent {
     }
 }
 
+/// Linear stores comments as Markdown and escapes punctuation on the way in, so
+/// a comment typed as `[print]` arrives as `\[print\]`. Undo that before
+/// looking for the marker — and before putting the text on paper, where the
+/// backslashes would otherwise be printed.
+pub fn unescape_markdown(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            // Markdown only lets a backslash escape ASCII punctuation.
+            Some(next) if next.is_ascii_punctuation() => out.push(next),
+            Some(next) => {
+                out.push('\\');
+                out.push(next);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
 fn has_marker(body: &str) -> bool {
-    body.to_lowercase().contains(MARKER)
+    unescape_markdown(body).to_lowercase().contains(MARKER)
 }
 
 /// The comment without the marker, so a note written alongside it can go on the
 /// paper. Empty if the marker was the whole comment.
 pub fn note(body: &str) -> String {
+    let body = unescape_markdown(body);
     let mut out = String::with_capacity(body.len());
-    let mut rest = body;
+    let mut rest = body.as_str();
     // The marker matched case-insensitively, so cut it the same way.
     while let Some(at) = rest.to_lowercase().find(MARKER) {
         out.push_str(&rest[..at]);
@@ -380,6 +406,24 @@ mod tests {
         assert_eq!(note("[PRINT] look at this"), "look at this");
         assert_eq!(note("[print]"), "");
         assert_eq!(note("before [print] after"), "before  after");
+    }
+
+    #[test]
+    fn linear_escapes_the_brackets_and_we_still_see_the_marker() {
+        // This is verbatim what Linear stored for a comment typed as "[print]".
+        let e = event("create", r"going to work on this today \[print\]", "me", None);
+        assert!(matches!(e.verdict("me"), Verdict::Print));
+        assert_eq!(note(r"going to work on this today \[print\]"), "going to work on this today");
+        assert_eq!(note(r"\[print\]"), "");
+    }
+
+    #[test]
+    fn unescaping_leaves_ordinary_text_alone() {
+        assert_eq!(unescape_markdown("nothing to undo"), "nothing to undo");
+        assert_eq!(unescape_markdown(r"a \* b \_ c"), "a * b _ c");
+        // A backslash before a letter is not an escape, and a trailing one stays.
+        assert_eq!(unescape_markdown(r"C:\path"), r"C:\path");
+        assert_eq!(unescape_markdown(r"ends with \"), r"ends with \");
     }
 
     #[test]
