@@ -156,30 +156,87 @@ impl Printer {
         let _ = handle.set_auto_detach_kernel_driver(true);
         handle.claim_interface(iface)?;
 
-        Ok(Printer {
+        let printer = Printer {
             handle,
             ep_out,
             ep_in: inp.map(|(a, _)| a),
             in_max_packet: inp.map(|(_, m)| m).unwrap_or(64),
             buf: Vec::new(),
-        })
+        };
+        // The device needs a moment after the claim — without this the first
+        // status request goes unanswered every single time, and its reply
+        // turns up later inside another request's window. Clear anything a
+        // previous process left behind while we are here.
+        std::thread::sleep(Duration::from_millis(120));
+        printer.drain();
+        Ok(printer)
     }
 
     // --- status ------------------------------------------------------------
 
-    /// Send a real-time status request and return the reply byte, if the printer answers.
-    fn query(&self, n: u8) -> Option<u8> {
-        let ep_in = self.ep_in?;
-        let timeout = Duration::from_millis(500);
-        self.handle.write_bulk(self.ep_out, &[DLE, EOT, n], timeout).ok()?;
-        let mut reply = vec![0u8; self.in_max_packet];
-        for _ in 0..3 {
-            if let Ok(len) = self.handle.read_bulk(ep_in, &mut reply, timeout) {
-                if len > 0 {
-                    return Some(reply[len - 1]);
-                }
+    /// Every `DLE EOT` reply has four fixed bits: 0 clear, 1 set, 4 set, 7
+    /// clear. Checking them is what tells an answer apart from a leftover byte.
+    pub fn is_status_byte(b: u8) -> bool {
+        b & 0b1001_0011 == 0b0001_0010
+    }
+
+    /// Throw away anything still sitting on the IN endpoint.
+    ///
+    /// This matters more than it looks. `status()` asks three questions in a
+    /// row and reads each answer with a different bit mask, so one stale byte
+    /// shifts every reply by one question — and a perfectly healthy printer
+    /// reports an open cover or a near-empty roll. Ask on a clean endpoint.
+    fn drain(&self) {
+        let Some(ep_in) = self.ep_in else { return };
+        let mut scratch = vec![0u8; self.in_max_packet];
+        for _ in 0..16 {
+            match self.handle.read_bulk(ep_in, &mut scratch, Duration::from_millis(50)) {
+                Ok(n) if n > 0 => continue,
+                _ => return,
             }
         }
+    }
+
+    /// Send a real-time status request and return the reply byte, if the
+    /// printer answers.
+    ///
+    /// **Exactly one request goes out per call.** Retrying by asking again is
+    /// the tempting shape and it is wrong: a reply that is slow rather than
+    /// lost then arrives after the second request, leaving a spare byte on the
+    /// endpoint. The next question reads that stale byte, and because each
+    /// question's reply is read with a different bit mask, a healthy printer
+    /// reports an open cover or a near-empty roll. So: ask once, read until it
+    /// answers, and clear up afterwards.
+    fn query(&self, n: u8) -> Option<u8> {
+        let ep_in = self.ep_in?;
+        self.drain();
+        self.handle
+            .write_bulk(self.ep_out, &[DLE, EOT, n], Duration::from_millis(500))
+            .ok()?;
+
+        let mut reply = vec![0u8; self.in_max_packet];
+        for _ in 0..10 {
+            let Ok(len) = self
+                .handle
+                .read_bulk(ep_in, &mut reply, Duration::from_millis(200))
+            else {
+                continue;
+            };
+            if std::env::var_os("RECEIPT_DEBUG_STATUS").is_some() {
+                let hex: Vec<String> = reply[..len].iter().map(|b| format!("{b:08b}")).collect();
+                eprintln!("query {n}: {len} bytes [{}]", hex.join(" "));
+            }
+            if let Some(b) = reply[..len].iter().copied().find(|b| Self::is_status_byte(*b)) {
+                // Anything still queued belongs to nobody; do not let the next
+                // question inherit it.
+                self.drain();
+                return Some(b);
+            }
+        }
+        // Gave up. The answer may still be on its way, and if it arrives while
+        // the next question is listening it will be read with the wrong mask.
+        std::thread::sleep(Duration::from_millis(150));
+        self.drain();
         None
     }
 
@@ -187,10 +244,19 @@ impl Printer {
     /// this is something to mention, not something to stop for.
     pub const NEARLY_OUT: &'static str = "paper nearly out";
 
+    /// Does this problem stop a print, or is it only worth mentioning?
+    pub fn is_blocking(problem: &str) -> bool {
+        problem != Self::NEARLY_OUT
+    }
+
     /// Only what stops a print outright — the cover being open, a genuinely
     /// empty roll, an error state. A warning is not a refusal.
+    ///
+    /// Callers that also want the full list should call `status()` once and
+    /// filter it with `is_blocking`: each of these is a round trip to the
+    /// device, and two of them can disagree about a cover that just moved.
     pub fn blockers(&self) -> Vec<String> {
-        self.status().into_iter().filter(|p| p != Self::NEARLY_OUT).collect()
+        self.status().into_iter().filter(|p| Self::is_blocking(p)).collect()
     }
 
     /// Ask the printer how it is. An empty list means it is ready.
@@ -411,4 +477,23 @@ fn wrap(line: &str, width: usize) -> Vec<String> {
         out.push(current);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_status_reply_is_told_apart_from_a_stray_byte() {
+        // Fixed bits: 0 clear, 1 set, 4 set, 7 clear.
+        assert!(Printer::is_status_byte(0b0001_0010)); // nothing wrong
+        assert!(Printer::is_status_byte(0b0001_0110)); // cover open
+        assert!(Printer::is_status_byte(0b0111_0010)); // paper out
+
+        assert!(!Printer::is_status_byte(0x00));
+        assert!(!Printer::is_status_byte(b'h')); // text echoed back
+        assert!(!Printer::is_status_byte(0b1001_0010)); // bit 7 set
+        assert!(!Printer::is_status_byte(0b0000_0010)); // bit 4 clear
+        assert!(!Printer::is_status_byte(0b0001_0011)); // bit 0 set
+    }
 }

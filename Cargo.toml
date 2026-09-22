@@ -8,7 +8,7 @@ edition = "2024"
 # cross-compiling for the Pi, where there is no aarch64 libusb to link against.
 vendored-usb = ["rusb/vendored"]
 # The HTTP endpoint. Off by default so the CLI does not drag in tokio.
-server = ["dep:axum", "dep:tokio", "dep:serde", "dep:serde_json", "dep:chrono"]
+server = ["dep:axum", "dep:tokio", "dep:serde", "dep:serde_json", "dep:chrono", "dep:reqwest", "dep:hmac", "dep:sha2"]
 
 [[bin]]
 name = "receipt"
@@ -30,3 +30,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"], optional = true }
+# rustls, not native TLS: cross-compiling OpenSSL to aarch64 is a yak-shave.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+hmac = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }

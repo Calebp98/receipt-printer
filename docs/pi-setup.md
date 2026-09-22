@@ -62,10 +62,18 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 sudo usermod -aG plugdev $USER
 ```
 
-Log out and back in for the group change to take. The tool detaches `usblp`
-itself when it claims the interface, so no blacklisting is needed — but if you
-ever see "Resource busy", `echo 'blacklist usblp' | sudo tee /etc/modprobe.d/blacklist-usblp.conf`
-and reboot is the bigger hammer.
+Log out and back in for the group change to take.
+
+**Blacklist `usblp` as well.** The tool detaches it when it claims the
+interface, but the kernel rebinds it the moment the claim is released, and that
+churn races with status reads:
+
+```sh
+echo 'blacklist usblp' | sudo tee /etc/modprobe.d/blacklist-usblp.conf
+sudo modprobe -r usblp
+```
+
+This is also the fix if you ever see "Resource busy".
 
 Check the printer is seen:
 
