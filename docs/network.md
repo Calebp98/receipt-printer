@@ -24,6 +24,7 @@ route to the port that does not come down it.
 - `GET /` — the page, compiled into the binary from `web/index.html`
 - `GET /api/status` — `{ready, detail, paused, remaining_today, max_chars}`
 - `POST /api/print` — `{password, name, text}`
+- `POST /linear/webhook` — Linear Comment events; see below
 - `GET /healthz` — for uptime checks
 
 Refusals carry the status code that fits: 401 wrong password, 400 empty, 413
@@ -57,6 +58,57 @@ A **warning is not a refusal**: the near-end paper sensor trips with metres
 still on the roll, so `blockers()` leaves it out and only an open cover, a truly
 empty roll or an error state stops a print. `/api/status` still reports it, and
 the page shows it while staying ready.
+
+## Linear
+
+Comment `[print]` on a Linear issue and it comes out on paper: identifier,
+priority, title at double size, state, assignee, estimate, due date, project,
+labels, the first 400 characters of the description, and whatever else the
+comment said.
+
+Linear posts Comment events to `POST /linear/webhook`. Two secrets live in
+`/etc/receipt-server.env` beside the password:
+
+```
+LINEAR_WEBHOOK_SECRET=lin_wh_...     # from the webhook in Linear settings
+LINEAR_API_KEY=lin_api_...           # a personal API key, read scope
+```
+
+Both or neither — the service refuses to start with only one, because an
+integration that verifies requests but cannot fetch anything is worse than one
+that is plainly off. With neither, the route answers 503 and says so.
+
+The API key needs only read access. It is also how the service knows who "me"
+is: it resolves `viewer` at startup, and only that person's comments print.
+
+### Why it is shaped this way
+
+- **The signature is checked over the raw bytes, before parsing.** Re-serialising
+  the JSON would not reproduce what was signed.
+- **A bad signature gets 401; everything else gets 200.** Linear retries a
+  non-200 at one minute, one hour and six hours, then disables the webhook. A
+  printer with its cover open must not be able to switch the integration off, so
+  no printing problem ever reaches the response.
+- **The reply goes out before the printing starts.** Linear allows five seconds,
+  and fetching the issue alone can outlast that.
+- **Only the marker *arriving* counts.** Linear fires an update for any edit, so
+  a comment that already said `[print]` would reprint every time a typo was
+  fixed. `updatedFrom.body` is what tells the difference. An update with no
+  previous body is treated as already-there: a fresh request is one new comment
+  away, and a spurious reprint is paper.
+- **Deliveries and comment ids are remembered** (the last 200), so a retry does
+  not mean a second receipt.
+- **A print that cannot happen is retried** every 30s for a few minutes, which
+  covers a paper change. It does not survive a restart; comment again.
+- **The pause file still wins.** Linear prints are exempt from the public daily
+  cap, though — your own work should not queue behind strangers.
+
+### Testing it without Linear
+
+Sign a payload with the same secret and post it. Note that Cloudflare's bot
+check rejects some HTTP clients on sight with a 403 and `error code: 1010` —
+that is Cloudflare, not this service, and `curl` gets through where Python's
+`urllib` does not.
 
 ## Running it
 
